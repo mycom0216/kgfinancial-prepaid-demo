@@ -10,7 +10,7 @@
 - 사용자 카드 소유권 확인, PostgreSQL 관계형 DB, 중복 요청 키, 관리자 감사 기록
 - KG이니시스 INIpay PRO 카드·실시간 계좌이체 인증 및 서버 승인 흐름
 - 이니시스 승인 응답의 가맹점 번호, 주문번호, 금액, 결제수단을 확인한 후에만 잔액 충전
-- 가짜 충전 API는 기본으로 꺼져 있어요. 개발 연습 때만 `DEMO_TOPUP_ENABLED=true`로 켤 수 있어요.
+- `POST /api/cards/{카드번호}/charge`도 실제 이니시스 결제 주문을 만들어요. 예전 가짜 잔액 충전 동작은 제거했어요.
 - 응답이 끊겨 승인 여부를 모르면 `APPROVAL_UNKNOWN`으로 남겨 다시 결제해 이중 충전하는 일을 막음
 - GitHub Actions에서 Maven 빌드와 취약점 스캔
 
@@ -27,7 +27,7 @@ INICIS_HASH_KEY=발급받은_테스트_Hash_Key
 APP_PUBLIC_URL=https://내-HTTPS-도메인
 ```
 
-결제 시작 API는 로그인 후 `POST /api/payments`에 다음 JSON과 고유한 `Idempotency-Key` 헤더를 보내요. 먼저 `GET /api/auth/csrf`에서 CSRF 토큰을 받아 `X-XSRF-TOKEN` 헤더에도 넣어야 해요.
+결제 시작 API는 로그인 후 `POST /api/payments` 또는 `POST /api/cards/{카드번호}/charge`에 다음 JSON과 고유한 `Idempotency-Key` 헤더를 보내요. 충전 주소에서는 `cardId`를 URL에 넣고 JSON에서 빼며, `method`는 생략하면 카드 결제로 선택돼요. 먼저 `GET /api/auth/csrf`에서 CSRF 토큰을 받아 `X-XSRF-TOKEN` 헤더에도 넣어야 해요.
 
 ```json
 {"cardId":1,"amount":1000,"method":"CARD"}
