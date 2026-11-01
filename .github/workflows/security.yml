@@ -1,0 +1,35 @@
+name: Security checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 4 * * 1'
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the source code
+        uses: actions/checkout@v4
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Prepare the CodeQL security scanner
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java-kotlin
+          build-mode: manual
+      - name: Build for the security scanner
+        run: mvn --batch-mode -DskipTests package
+      - name: Save security scan results
+        uses: github/codeql-action/analyze@v3
+      - name: Check the project builds
+        run: mvn --batch-mode verify
