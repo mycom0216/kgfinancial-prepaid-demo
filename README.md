@@ -7,6 +7,7 @@
 ## 준비된 기능
 
 - BCrypt 비밀번호 저장, 세션 로그인, CSRF 방어, 일반 사용자와 관리자 권한 분리
+- 모바일 앱용 짧은 기간 Bearer 로그인 토큰과 로그아웃 폐기 기능
 - 사용자 카드 소유권 확인, PostgreSQL 관계형 DB, 중복 요청 키, 관리자 감사 기록
 - KG이니시스 INIpay PRO 카드·실시간 계좌이체 인증 및 서버 승인 흐름
 - 이니시스 승인 응답의 가맹점 번호, 주문번호, 금액, 결제수단을 확인한 후에만 잔액 충전
@@ -42,6 +43,18 @@ APP_PUBLIC_URL=https://내-HTTPS-도메인
 1. `.env.example`을 `.env`로 복사하고 DB 관리자 비밀번호, 앱 관리자 비밀번호, 이니시스 테스트 정보를 설정해요.
 2. `docker compose --env-file .env up -d`로 PostgreSQL을 켜요.
 3. 터미널에서 `SPRING_PROFILES_ACTIVE=postgres`와 `.env`의 값들을 환경 변수로 불러온 뒤 `mvn spring-boot:run`을 실행해요. PowerShell에서는 `$env:SPRING_PROFILES_ACTIVE='postgres'`처럼 설정할 수 있어요.
+
+## 모바일 앱에서 API 부르기
+
+Android/iOS 앱은 먼저 `GET /api/auth/csrf`를 불러 CSRF 토큰과 `XSRF-TOKEN` 쿠키를 받아요. 회원가입 `POST /api/mobile/auth/register`와 로그인 `POST /api/mobile/auth/login`에는 쿠키를 보관해 함께 보내고, 토큰을 `X-XSRF-TOKEN` 헤더에 넣어요. 로그인 전 보호를 풀지 않았기 때문이에요. 로그인 답에 들어 있는 `accessToken`은 12시간 동안 쓸 수 있는 열쇠예요. 앱은 열쇠를 Android Keystore 또는 iOS Keychain 같은 안전한 저장소에 보관하고, 화면에 적거나 로그로 출력하지 마세요. 만료되면 다시 로그인하면 돼요.
+
+로그인 뒤 모든 API 요청에 아래 헤더를 붙여요. 웹 쿠키용 CSRF 토큰 없이도 기존 카드·결제 API를 사용할 수 있어요.
+
+```http
+Authorization: Bearer 로그인응답의_accessToken
+```
+
+예를 들어 카드 목록은 `GET /api/cards`, 충전 주문은 `POST /api/cards/{카드번호}/charge`, 잔액 사용 연습은 `POST /api/cards/{카드번호}/pay`예요. 로그아웃은 `POST /api/mobile/auth/logout`을 부르면 그 토큰을 바로 폐기해요. 이 서버는 앱 전용 HTTPS 주소에 배포해야 해요. 지금 프로젝트에는 특정 회사의 비공개 모빌카드 API 주소나 데이터 형식이 없어서, 여기까지는 일반 Android/iOS 앱과 연결할 수 있는 표준 API예요.
 
 ## 운영 배포 전 남은 절차
 
