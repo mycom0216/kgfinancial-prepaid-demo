@@ -112,3 +112,43 @@ class AuditLog {
     String getTarget() { return target; }
     Instant getCreatedAt() { return createdAt; }
 }
+
+// PG 결제 한 건의 상태만 저장해요. 카드번호나 계좌번호는 저장하지 않아요.
+@Entity
+@Table(name = "payment_orders", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_payment_order_id", columnNames = "order_id"),
+        @UniqueConstraint(name = "uk_payment_idempotency", columnNames = {"user_id", "idempotency_key"})})
+class PaymentOrder {
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    @Column(name = "order_id", nullable = false, length = 40) private String orderId;
+    @Column(name = "user_id", nullable = false) private Long userId;
+    @Column(name = "card_id", nullable = false) private Long cardId;
+    @Column(nullable = false) private long amount;
+    @Column(name = "pay_type", nullable = false, length = 10) private String payType;
+    @Column(nullable = false, length = 24) private String status;
+    @Column(name = "idempotency_key", nullable = false, length = 64) private String idempotencyKey;
+    @Column(name = "provider_tid", length = 100) private String providerTid;
+    @Column(nullable = false) private Instant createdAt;
+    @Column(nullable = false) private Instant updatedAt;
+
+    protected PaymentOrder() { }
+    PaymentOrder(String orderId, Long userId, Long cardId, long amount, String payType, String idempotencyKey) {
+        this.orderId=orderId; this.userId=userId; this.cardId=cardId; this.amount=amount;
+        this.payType=payType; this.idempotencyKey=idempotencyKey; this.status="READY";
+        this.createdAt=Instant.now(); this.updatedAt=this.createdAt;
+    }
+    String getOrderId() { return orderId; }
+    Long getUserId() { return userId; }
+    Long getCardId() { return cardId; }
+    long getAmount() { return amount; }
+    String getPayType() { return payType; }
+    String getStatus() { return status; }
+    String getIdempotencyKey() { return idempotencyKey; }
+    String getProviderTid() { return providerTid; }
+    void markApproving() { this.status="APPROVING"; this.updatedAt=Instant.now(); }
+    void markUnknown() { this.status="APPROVAL_UNKNOWN"; this.updatedAt=Instant.now(); }
+    void markPaid(String tid) { this.status="PAID"; this.providerTid=tid; this.updatedAt=Instant.now(); }
+    void markFailed() { this.status="FAILED"; this.updatedAt=Instant.now(); }
+}
+
