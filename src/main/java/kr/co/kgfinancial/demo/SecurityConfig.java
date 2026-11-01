@@ -29,9 +29,11 @@ import java.util.function.Supplier;
 
 @Configuration
 class SecurityConfig {
+    // BCrypt는 비밀번호를 안전한 지문으로 바꿔 저장하는 도구예요.
     @Bean PasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(); }
 
     @Bean UserDetailsService userDetailsService(UserRepository users) {
+        // 로그인할 때 사용자가 적은 이름을 찾아 암호화된 비밀번호와 역할만 보안 기능에 건네요.
         return username -> users.findByUsername(username.toLowerCase())
                 .map(account -> User.withUsername(account.getUsername())
                         .password(account.getPasswordHash()).roles(account.getRole()).build())
@@ -39,18 +41,23 @@ class SecurityConfig {
     }
 
     @Bean SecurityFilterChain securityFilterChain(HttpSecurity http, AuditRepository audits) throws Exception {
+        // CSRF는 다른 사이트가 몰래 내 이름으로 요청을 보내는 일을 막는 검사예요.
         CookieCsrfTokenRepository csrf = CookieCsrfTokenRepository.withHttpOnlyFalse();
         csrf.setCookiePath("/");
         http
             .csrf(config -> config.csrfTokenRepository(csrf)
                     .csrfTokenRequestHandler(new BrowserCsrfHandler())
-                    // 결제사는 브라우저에서 서버로 결과를 보내므로 이 주소만 CSRF 검사를 건너뛰어요.
+                    // 결제사는 브라우저를 통해 서버로 결과를 보내므로 CSRF 토큰을 갖고 있지 않아요.
+                    // 이 한 주소만 토큰 검사를 생략하고, 승인 여부는 이니시스 서버에 다시 물어 확인해요.
                     .ignoringRequestMatchers("/api/payments/inicis/next"))
             .authorizeHttpRequests(auth -> auth
+                // 로그인·회원가입·결제 결과 받기는 로그인 전에도 들어올 수 있어야 해요.
                 .requestMatchers("/api/auth/register", "/api/auth/csrf", "/api/payments/inicis/next", "/error").permitAll()
+                // /api/admin으로 시작하는 주소는 ADMIN 역할이 있는 사람만 써요.
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated())
             .formLogin(form -> form
+                // 아이디와 비밀번호를 확인한 뒤 서버가 세션 쿠키를 만들어 로그인 상태를 기억해요.
                 .loginProcessingUrl("/api/auth/login")
                 .successHandler((request, response, authentication) -> {
                     audits.save(new AuditLog(authentication.getName(), "로그인 성공", "session"));
@@ -90,6 +97,7 @@ class SecurityConfig {
             @Value("${app.admin.username:}") String username,
             @Value("${app.admin.password:}") String password) {
         return args -> {
+            // 관리자 계정은 공개 코드에 비밀번호를 넣지 않고, 배포 환경에서 안전하게 넣은 경우에만 만들어요.
             if (!username.isBlank() && password.length() >= 16 && !users.existsByUsername(username.toLowerCase())) {
                 users.save(new UserAccount(username.toLowerCase(), passwords.encode(password), "ADMIN"));
             }
@@ -105,12 +113,14 @@ class BrowserCsrfHandler implements CsrfTokenRequestHandler {
     @Override
     public void handle(HttpServletRequest request, HttpServletResponse response,
                        Supplier<CsrfToken> token) {
+        // 브라우저 화면과 서버가 서로 토큰을 주고받아 요청이 진짜 내 화면에서 시작됐는지 확인해요.
         masked.handle(request, response, token);
         token.get(); // 브라우저가 쓸 토큰 쿠키가 만들어지도록 해요.
     }
 
     @Override
     public String resolveCsrfTokenValue(HttpServletRequest request, CsrfToken token) {
+        // 화면이 보내는 헤더가 있으면 그것을 확인하고, 없으면 Spring 기본 방식으로 검사해요.
         if (StringUtils.hasText(request.getHeader(token.getHeaderName()))) {
             return plain.resolveCsrfTokenValue(request, token);
         }
