@@ -38,11 +38,27 @@ APP_PUBLIC_URL=https://내-HTTPS-도메인
 
 주문 상태 확인은 로그인한 사용자가 `GET /api/payments/{orderId}`로 볼 수 있어요. `PAID`가 아니면 충전이 완료된 것이 아니에요. `APPROVAL_UNKNOWN`은 통신이 끊겨 이니시스 가맹점 관리자에서 거래를 확인해야 하는 상태예요. 같은 주문을 다시 승인하지 마세요.
 
-## PostgreSQL 실행
+## 내 컴퓨터에서 PostgreSQL과 앱 실행하기 (Windows PowerShell)
 
-1. `.env.example`을 `.env`로 복사하고 DB 관리자 비밀번호, 앱 관리자 비밀번호, 이니시스 테스트 정보를 설정해요.
-2. `docker compose --env-file .env up -d`로 PostgreSQL을 켜요.
-3. 터미널에서 `SPRING_PROFILES_ACTIVE=postgres`와 `.env`의 값들을 환경 변수로 불러온 뒤 `mvn spring-boot:run`을 실행해요. PowerShell에서는 `$env:SPRING_PROFILES_ACTIVE='postgres'`처럼 설정할 수 있어요.
+필요한 프로그램: Java 17, Maven, Docker Desktop. 저장소에는 Docker Compose 설정이 있어 PostgreSQL 서버와 데이터를 준비해 줘요.
+
+1. 저장소 폴더에서 비밀값 보관용 파일을 만들어요.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+2. 메모장으로 `.env`를 열고 `DATABASE_PASSWORD`와 `BOOTSTRAP_ADMIN_PASSWORD`의 예시 값을 각각 다른 긴 비밀번호로 바꿔요. 테스트 MID, Hash Key, HTTPS 주소가 없다면 이 값들은 빈 값으로 둘 수 있어요. **실 비밀번호나 키는 GitHub에 올리지 마세요.** `.env`는 Git 제외 목록에 들어 있어요.
+
+3. DB와 앱을 한 번에 실행해요.
+
+```powershell
+.\run-local.ps1
+```
+
+이 스크립트는 `.env`를 이 PowerShell 창에서만 읽고, Docker 안의 PostgreSQL을 켠 다음 앱을 실행해요. 처음 실행할 때에는 앱이 Flyway로 DB 표를 자동으로 만들어요. 데이터는 Docker의 `kgfinancial-db` 저장 공간에 남기 때문에 앱이나 컴퓨터를 다시 시작해도 보존돼요. 서버를 멈추려면 별도 PowerShell 창에서 `docker compose down`을 실행하세요. 데이터까지 지우려면 `docker compose down -v`를 실행하지만, 저장된 DB 데이터가 모두 삭제돼요.
+
+앱 주소는 `http://localhost:8080`이에요. 로그인 안내가 나오면 앱이 실행된 상태예요. 관리자 로그인은 `.env`의 `BOOTSTRAP_ADMIN_USERNAME`과 `BOOTSTRAP_ADMIN_PASSWORD` 값을 사용해요.
 
 ## 모바일 앱에서 API 부르기
 
@@ -64,4 +80,3 @@ GitHub 저장소는 private으로 유지해요. 운영 결제는 `INICIS_MODE=pr
 
 - [KG이니시스 INIpay PRO 공식 연동 문서](https://manual.inicis.com/inipaypro/)
 - [KG이니시스 INIpay PRO 테스트 안내](https://manual.inicis.com/pay/demo/)
-
