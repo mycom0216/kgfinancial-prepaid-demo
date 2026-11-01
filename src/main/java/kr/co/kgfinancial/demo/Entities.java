@@ -164,3 +164,31 @@ class PaymentOrder {
     void markFailed() { this.status="FAILED"; this.updatedAt=Instant.now(); }
 }
 
+// 모바일 앱 로그인용 토큰이에요. 실제 토큰은 휴대폰에만 보여주고 DB에는 지문만 저장해요.
+@Entity
+@Table(name="mobile_access_tokens", uniqueConstraints=@UniqueConstraint(name="uk_mobile_token_hash", columnNames="token_hash"))
+class MobileAccessToken {
+    @Id @GeneratedValue(strategy=GenerationType.IDENTITY)
+    private Long id;
+    @Column(name="user_id", nullable=false)
+    private Long userId;
+    @Column(name="token_hash", nullable=false, length=64)
+    private String tokenHash;
+    @Column(name="expires_at", nullable=false)
+    private Instant expiresAt;
+    @Column(name="revoked_at")
+    private Instant revokedAt;
+    @Column(name="created_at", nullable=false)
+    private Instant createdAt;
+
+    protected MobileAccessToken() { }
+    MobileAccessToken(Long userId, String tokenHash, Instant expiresAt) {
+        this.userId=userId; this.tokenHash=tokenHash; this.expiresAt=expiresAt; this.createdAt=Instant.now();
+    }
+    Long getUserId() { return userId; }
+    String getTokenHash() { return tokenHash; }
+    Instant getExpiresAt() { return expiresAt; }
+    Instant getRevokedAt() { return revokedAt; }
+    void revoke() { this.revokedAt=Instant.now(); }
+}
+
