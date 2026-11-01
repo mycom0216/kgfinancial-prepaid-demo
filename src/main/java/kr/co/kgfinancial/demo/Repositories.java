@@ -34,4 +34,7 @@ interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long> {
     // 같은 사람이 같은 요청 키로 만든 결제 주문을 다시 찾아 중복 주문인지 확인해요.
     Optional<PaymentOrder> findByUserIdAndIdempotencyKey(Long userId, String key);
 }
+interface MobileAccessTokenRepository extends JpaRepository<MobileAccessToken, Long> {
+    Optional<MobileAccessToken> findByTokenHash(String tokenHash);
+}
 
