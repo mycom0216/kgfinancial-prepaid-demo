@@ -13,11 +13,15 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import java.util.List;
 import java.util.Map;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 
 // 웹에서 들어오는 글을 담는 상자예요. 사용자는 가입할 때 관리자 역할을 정할 수 없어요.
 record RegisterRequest(@NotBlank @Size(min = 3, max = 40) @Pattern(regexp = "[a-zA-Z0-9_.-]+") String username,
                        @NotBlank @Size(min = 12, max = 100) String password) { }
-record AmountRequest(@jakarta.validation.constraints.Positive long amount) { }
+record AmountRequest(@jakarta.validation.constraints.Positive @jakarta.validation.constraints.Max(1000000000L) long amount) { }
 record CardView(Long id, long balance) { }
 record CardCreated(Long id, long balance) { }
 record CsrfView(String token) { }
@@ -42,6 +46,9 @@ class ApiController {
     @PostMapping("/auth/register")
     @Transactional
     Map<String, String> register(@Valid @RequestBody RegisterRequest request) {
+        if (request.password().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "비밀번호는 UTF-8 기준 72바이트 이하여야 해요.");
+        }
         String username = request.username().toLowerCase();
         if (users.existsByUsername(username)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 사용 중인 아이디예요.");
@@ -108,7 +115,8 @@ class ApiController {
     private CardView changeBalance(Long id, String key, long amount, String kind, Authentication auth) {
         UserAccount user = findUser(auth.getName());
         DemoCard card = findOwnedCard(id, auth.getName());
-        DemoTransaction previous = transactions.findByUserIdAndIdempotencyKey(user.getId(), key).orElse(null);
+        String safeKey = hashKey(key);
+        DemoTransaction previous = transactions.findByUserIdAndIdempotencyKey(user.getId(), safeKey).orElse(null);
         if (previous != null) {
             // 같은 키로 다른 행동이나 금액을 보내면 헷갈리지 않게 거절해요.
             if (!previous.getCardId().equals(id) || !previous.getKind().equals(kind) || previous.getAmount() != amount) {
@@ -121,7 +129,7 @@ class ApiController {
         }
         if ("충전".equals(kind)) card.addMoney(amount);
         else card.spendMoney(amount);
-        transactions.save(new DemoTransaction(user.getId(), id, kind, amount, key));
+        transactions.save(new DemoTransaction(user.getId(), id, kind, amount, safeKey));
         audits.save(new AuditLog(auth.getName(), kind, "card:" + id));
         return new CardView(card.getId(), card.getBalance());
     }
@@ -137,11 +145,23 @@ class ApiController {
         return card;
     }
 
+    private String hashKey(String key) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256을 사용할 수 없어요.", impossible);
+        }
+    }
+
     private UserAccount findUser(String username) {
         return users.findByUsername(username).orElseThrow(
                 () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요해요."));
     }
 }
+
+
+
 
 
 
