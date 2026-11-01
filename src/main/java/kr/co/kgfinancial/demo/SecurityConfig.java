@@ -43,9 +43,11 @@ class SecurityConfig {
         csrf.setCookiePath("/");
         http
             .csrf(config -> config.csrfTokenRepository(csrf)
-                    .csrfTokenRequestHandler(new BrowserCsrfHandler()))
+                    .csrfTokenRequestHandler(new BrowserCsrfHandler())
+                    // 결제사는 브라우저에서 서버로 결과를 보내므로 이 주소만 CSRF 검사를 건너뛰어요.
+                    .ignoringRequestMatchers("/api/payments/inicis/next"))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/register", "/api/auth/csrf", "/error").permitAll()
+                .requestMatchers("/api/auth/register", "/api/auth/csrf", "/api/payments/inicis/next", "/error").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated())
             .formLogin(form -> form
@@ -122,3 +124,4 @@ class CsrfController {
     @GetMapping("/api/auth/csrf")
     Map<String, String> csrf(CsrfToken token) { return Map.of("token", token.getToken()); }
 }
+
