@@ -15,6 +15,7 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
@@ -40,7 +41,8 @@ class SecurityConfig {
                 .orElseThrow(() -> new org.springframework.security.core.userdetails.UsernameNotFoundException("계정을 찾지 못했어요."));
     }
 
-    @Bean SecurityFilterChain securityFilterChain(HttpSecurity http, AuditRepository audits) throws Exception {
+    @Bean SecurityFilterChain securityFilterChain(HttpSecurity http, AuditRepository audits,
+            MobileAccessTokenRepository mobileTokens, UserDetailsService userDetails, UserRepository accounts) throws Exception {
         // CSRF는 다른 사이트가 몰래 내 이름으로 요청을 보내는 일을 막는 검사예요.
         CookieCsrfTokenRepository csrf = CookieCsrfTokenRepository.withHttpOnlyFalse();
         csrf.setCookiePath("/");
@@ -49,10 +51,12 @@ class SecurityConfig {
                     .csrfTokenRequestHandler(new BrowserCsrfHandler())
                     // 결제사는 브라우저를 통해 서버로 결과를 보내므로 CSRF 토큰을 갖고 있지 않아요.
                     // 이 한 주소만 토큰 검사를 생략하고, 승인 여부는 이니시스 서버에 다시 물어 확인해요.
-                    .ignoringRequestMatchers("/api/payments/inicis/next"))
+                    .ignoringRequestMatchers("/api/payments/inicis/next")
+                    // 앱은 쿠키 대신 Authorization 헤더에 비밀 토큰을 직접 넣으므로 CSRF 공격에 노출되지 않아요.
+                    .ignoringRequestMatchers(new BearerOnlyRequestMatcher()))
             .authorizeHttpRequests(auth -> auth
                 // 로그인·회원가입·결제 결과 받기는 로그인 전에도 들어올 수 있어야 해요.
-                .requestMatchers("/api/auth/register", "/api/auth/csrf", "/api/payments/inicis/next", "/error").permitAll()
+                .requestMatchers("/api/auth/register", "/api/auth/csrf", "/api/payments/inicis/next", "/api/mobile/auth/register", "/api/mobile/auth/login", "/error").permitAll()
                 // /api/admin으로 시작하는 주소는 ADMIN 역할이 있는 사람만 써요.
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated())
@@ -84,7 +88,9 @@ class SecurityConfig {
                     response.setContentType("application/json;charset=UTF-8");
                     response.getWriter().write("{\"message\":\"먼저 로그인해 주세요.\"}");
                 }, new MediaTypeRequestMatcher(MediaType.APPLICATION_JSON)))
-            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()));
+            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
+            // 앱의 Bearer 토큰을 먼저 확인해요. 토큰 로그인이어도 기존 카드 권한 검사는 그대로 적용돼요.
+            .addFilterBefore(new MobileBearerTokenFilter(mobileTokens,userDetails,accounts), UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 
