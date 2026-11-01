@@ -1,7 +1,6 @@
 package kr.co.kgfinancial.demo;
 
 import jakarta.validation.Valid;
-import org.springframework.beans.factory.annotation.Value;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -36,13 +35,11 @@ class ApiController {
     private final TransactionRepository transactions;
     private final AuditRepository audits;
     private final PasswordEncoder passwords;
-    private final boolean demoTopupEnabled;
 
     ApiController(UserRepository users, CardRepository cards, TransactionRepository transactions,
-                  AuditRepository audits, PasswordEncoder passwords,
-                  @Value("${demo.topup-enabled:false}") boolean demoTopupEnabled) {
+                  AuditRepository audits, PasswordEncoder passwords) {
         this.users = users; this.cards = cards; this.transactions = transactions;
-        this.audits = audits; this.passwords = passwords; this.demoTopupEnabled = demoTopupEnabled;
+        this.audits = audits; this.passwords = passwords;
     }
 
     // 가입 정보는 아이디와 비밀번호만 받아요. 실제 이름이나 전화번호는 묻지 않아요.
@@ -81,15 +78,6 @@ class ApiController {
         UserAccount user = findUser(auth.getName());
         return cards.findByOwnerIdOrderByIdDesc(user.getId()).stream()
                 .map(card -> new CardView(card.getId(), card.getBalance())).toList();
-    }
-
-    // 매번 다른 Idempotency-Key를 보내세요. 같은 키를 다시 보내면 잔액은 한 번만 바뀌어요.
-    @PostMapping("/cards/{id}/charge")
-    @Transactional
-    CardView charge(@PathVariable Long id, @RequestHeader("Idempotency-Key") @Size(min=10, max=100) String key,
-                    @Valid @RequestBody AmountRequest request, Authentication auth) {
-        if (!demoTopupEnabled) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "가짜 충전은 꺼져 있어요. 이니시스 결제를 사용해 주세요.");
-        return changeBalance(id, key, request.amount(), "충전", auth);
     }
 
     @PostMapping("/cards/{id}/pay")
