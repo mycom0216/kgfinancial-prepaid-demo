@@ -23,7 +23,9 @@ import java.util.Map;
 import java.util.UUID;
 
 record PaymentStartRequest(@NotNull Long cardId, @jakarta.validation.constraints.Positive @Max(1000000000L) long amount,
-                           @Pattern(regexp="CARD|BANK") String method) { }
+                           @NotNull @Pattern(regexp="CARD|BANK") String method) { }
+record CardChargeRequest(@jakarta.validation.constraints.Positive @Max(1000000000L) long amount,
+                         @Pattern(regexp="CARD|BANK") String method) { }
 record PaymentStartResponse(String orderId, String scriptUrl, Map<String,String> parameters) { }
 record PaymentStatus(String orderId, long amount, String method, String status) { }
 
@@ -50,6 +52,10 @@ class InicisPaymentController {
     @Transactional
     PaymentStartResponse start(@Valid @RequestBody PaymentStartRequest request,
                                @RequestHeader("Idempotency-Key") String requestKey, Authentication auth) {
+        return prepareOrder(request.cardId(), request.amount(), request.method(), requestKey, auth);
+    }
+
+    PaymentStartResponse prepareOrder(Long cardId, long amount, String method, String requestKey, Authentication auth) {
         if (mid.isBlank() || hashKey.isBlank() || publicUrl.isBlank()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "이니시스 MID, 해시키, HTTPS 공개 주소를 환경 변수에 설정해 주세요.");
         }
@@ -58,24 +64,24 @@ class InicisPaymentController {
         if (requestKey.length()<10 || requestKey.length()>100)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Idempotency-Key는 10~100글자여야 해요.");
         UserAccount user=users.findByUsername(auth.getName()).orElseThrow();
-        DemoCard card=cards.findById(request.cardId()).filter(c->c.getOwnerId().equals(user.getId()))
+        DemoCard card=cards.findById(cardId).filter(c->c.getOwnerId().equals(user.getId()))
                 .orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"카드를 찾지 못했어요."));
         String key=sha256(requestKey);
         PaymentOrder order=orders.findByUserIdAndIdempotencyKey(user.getId(),key).orElse(null);
         if (order!=null) {
-            if (!order.getCardId().equals(card.getId()) || order.getAmount()!=request.amount() || !order.getPayType().equals(request.method()))
+            if (!order.getCardId().equals(card.getId()) || order.getAmount()!=amount || !order.getPayType().equals(method))
                 throw new ResponseStatusException(HttpStatus.CONFLICT,"같은 요청 키를 다른 결제에 사용할 수 없어요.");
             if (!order.getStatus().equals("READY")) throw new ResponseStatusException(HttpStatus.CONFLICT,"이 주문은 이미 결제 절차를 시작했어요.");
         } else {
-            order=orders.save(new PaymentOrder("KG"+UUID.randomUUID().toString().replace("-",""), user.getId(), card.getId(), request.amount(), request.method(), key));
+            order=orders.save(new PaymentOrder("KG"+UUID.randomUUID().toString().replace("-",""), user.getId(), card.getId(), amount, method, key));
             audits.save(new AuditLog(auth.getName(),"이니시스 결제 주문 생성","order:"+order.getOrderId()));
         }
         String stamp=Long.toString(System.currentTimeMillis());
         Map<String,String> fields=Map.ofEntries(
-                Map.entry("P_MID",mid),Map.entry("P_OID",order.getOrderId()),Map.entry("P_PAY_TYPE",request.method()),Map.entry("P_DEVICE_TYPE","WEB"),
-                Map.entry("P_IDCCODE","Y"),Map.entry("P_AMT",Long.toString(request.amount())),Map.entry("P_GOODS","선불카드 충전"),
+                Map.entry("P_MID",mid),Map.entry("P_OID",order.getOrderId()),Map.entry("P_PAY_TYPE",method),Map.entry("P_DEVICE_TYPE","WEB"),
+                Map.entry("P_IDCCODE","Y"),Map.entry("P_AMT",Long.toString(amount)),Map.entry("P_GOODS","선불카드 충전"),
                 Map.entry("P_UNAME","회원"),Map.entry("P_NEXT_URL",publicUrl+"/api/payments/inicis/next"),
-                Map.entry("P_TIMESTAMP",stamp),Map.entry("P_CHKFAKE",chkFake(request.amount(),order.getOrderId(),stamp)),Map.entry("P_CHARSET","UTF-8"));
+                Map.entry("P_TIMESTAMP",stamp),Map.entry("P_CHKFAKE",chkFake(amount,order.getOrderId(),stamp)),Map.entry("P_CHARSET","UTF-8"));
         return new PaymentStartResponse(order.getOrderId(),"https://paypro.inicis.com/std/payment/js/INIPayPro_v2.js",fields);
     }
 
@@ -156,6 +162,24 @@ class InicisPaymentController {
     private String resultPage(boolean ok,String oid) {
         String message=ok?"결제가 확인되어 연습 카드 잔액에 반영됐어요.":"결제 결과를 확인할 수 없어요. 주문 상태를 확인해 주세요.";
         return "<!doctype html><meta charset='utf-8'><title>결제 결과</title><p>"+message+"</p><p>주문 번호: "+oid+"</p><a href='/'>처음으로</a>";
+    }
+}
+
+// 예전 주소로 들어온 충전도 이니시스 결제 주문을 만들어요. 여기서는 잔액을 직접 바꾸지 않아요.
+@RestController
+@RequestMapping("/api/cards")
+class CardChargeController {
+    private final InicisPaymentController payments;
+    CardChargeController(InicisPaymentController payments) { this.payments=payments; }
+
+    @PostMapping("/{cardId}/charge")
+    @Transactional
+    PaymentStartResponse charge(@PathVariable Long cardId, @Valid @RequestBody CardChargeRequest request,
+                                @RequestHeader("Idempotency-Key") String requestKey, Authentication auth) {
+        String method=request.method()==null?"CARD":request.method();
+        if (!method.equals("CARD") && !method.equals("BANK"))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"결제 방식은 CARD 또는 BANK여야 해요.");
+        return payments.prepareOrder(cardId,request.amount(),method,requestKey,auth);
     }
 }
 
