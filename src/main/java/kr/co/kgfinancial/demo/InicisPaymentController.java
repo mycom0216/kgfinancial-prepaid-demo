@@ -5,9 +5,13 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.*;
@@ -17,17 +21,18 @@ import org.springframework.http.HttpStatus;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.time.Instant;
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.Map;
 import java.util.UUID;
 
 // /api/payments에 보내는 입력 상자예요. 돈을 얼마나 넣을지와 어떤 결제 방법인지 적어요.
 // 숫자 검사표(@Positive, @Max)는 0원이나 너무 큰 값을 미리 막아줘요.
-record PaymentStartRequest(@NotNull Long cardId, @jakarta.validation.constraints.Positive @Max(1000000000L) long amount,
+record PaymentStartRequest(@NotNull Long cardId, @jakarta.validation.constraints.Positive @Max(999999999L) long amount,
                            @NotNull @Pattern(regexp="CARD|BANK") String method) { }
 // 예전 카드 충전 주소에서 받는 입력이에요. 결제 방법을 빼면 카드(CARD)로 진행해요.
-record CardChargeRequest(@jakarta.validation.constraints.Positive @Max(1000000000L) long amount,
+record CardChargeRequest(@jakarta.validation.constraints.Positive @Max(999999999L) long amount,
                          @Pattern(regexp="CARD|BANK") String method) { }
 // 브라우저가 이니시스 결제창을 열 수 있도록 서버가 주는 답이에요.
 record PaymentStartResponse(String orderId, String scriptUrl, Map<String,String> parameters) { }
@@ -46,13 +51,23 @@ class InicisPaymentController {
     private final AuditRepository audits;
     // MID와 Hash Key는 비밀이므로 코드에 적지 않고 실행할 때 환경 변수에서 받아요.
     private final String mid, hashKey, publicUrl, mode;
+    private final Environment environment;
+    private final TransactionTemplate approvalTransactions;
+    private final RestClient gatewayClient;
 
     InicisPaymentController(UserRepository users, CardRepository cards, PaymentOrderRepository orders,
                             TransactionRepository transactions, AuditRepository audits,
                             @Value("${inicis.mid:}") String mid, @Value("${inicis.hash-key:}") String hashKey,
-                            @Value("${app.public-url:}") String publicUrl, @Value("${inicis.mode:staging}") String mode) {
+                            @Value("${app.public-url:}") String publicUrl, @Value("${inicis.mode:staging}") String mode,
+                            Environment environment, PlatformTransactionManager transactionManager) {
         this.users=users; this.cards=cards; this.orders=orders; this.transactions=transactions; this.audits=audits;
-        this.mid=mid; this.hashKey=hashKey; this.publicUrl=publicUrl; this.mode=mode;
+        this.environment=environment;
+        this.approvalTransactions = new TransactionTemplate(transactionManager);
+        var requestFactory = new JdkClientHttpRequestFactory(HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5)).build());
+        requestFactory.setReadTimeout(Duration.ofSeconds(15));
+        this.gatewayClient = RestClient.builder().requestFactory(requestFactory).build();
+        this.mid=mid; this.hashKey=hashKey; this.publicUrl=publicUrl.replaceFirst("/$", ""); this.mode=mode;
     }
 
     // 1단계: 결제창에 보낼 주문 정보를 서버가 만들어요.
@@ -67,7 +82,7 @@ class InicisPaymentController {
     PaymentStartResponse prepareOrder(Long cardId, long amount, String method, String requestKey, Authentication auth) {
         // 비밀값이나 HTTPS 주소가 빠졌다면 결제 주문을 만들지 않아요.
         // HTTPS는 브라우저와 서버 사이의 통신을 잠가서 엿보거나 바꾸기 어렵게 해줘요.
-        if (mid.isBlank() || hashKey.isBlank() || publicUrl.isBlank()) {
+        if (!gatewayProfileEnabled() || mid.isBlank() || hashKey.isBlank() || publicUrl.isBlank()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "이니시스 MID, 해시키, HTTPS 공개 주소를 환경 변수에 설정해 주세요.");
         }
         if (!publicUrl.startsWith("https://") || publicUrl.length() > 400)
@@ -76,7 +91,7 @@ class InicisPaymentController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Idempotency-Key는 10~100글자여야 해요.");
         // 로그인한 사람의 계정을 찾고, 요청한 카드가 바로 그 사람 카드인지 확인해요.
         // 카드 번호만 알아내서 다른 사람 돈을 충전하는 일을 막는 검사예요.
-        UserAccount user=users.findByUsername(auth.getName()).orElseThrow();
+        UserAccount user=users.findByUsernameForUpdate(auth.getName()).orElseThrow();
         DemoCard card=cards.findById(cardId).filter(c->c.getOwnerId().equals(user.getId()))
                 .orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"카드를 찾지 못했어요."));
         // 원래 요청 키를 DB에 그대로 보관하지 않도록 지문처럼 바꿔 저장해요.
@@ -103,63 +118,105 @@ class InicisPaymentController {
         return new PaymentStartResponse(order.getOrderId(),"https://paypro.inicis.com/std/payment/js/INIPayPro_v2.js",fields);
     }
 
-    // 2단계: PG 결제창이 끝나면 이니시스가 이 주소로 결과를 보내요.
-    // 여기서 받은 값은 인터넷에서 온 값이라 바로 믿지 않아요. 아래에서 이니시스 서버에 다시 물어봐요.
     @RequestMapping(value="/inicis/next", method={RequestMethod.POST,RequestMethod.GET}, produces=MediaType.TEXT_HTML_VALUE)
-    @Transactional
     String next(@RequestParam MultiValueMap<String,String> form) {
-        String oid=value(form,"P_OID"), status=value(form,"P_STATUS"), callbackMid=value(form,"P_MID");
-        // DB 잠금은 같은 주문 결과가 동시에 두 번 와도 한 번씩 차례대로 처리하게 해요.
-        // 그래서 이중 클릭이나 중복 콜백으로 잔액이 두 번 오르는 일을 막아요.
-        PaymentOrder order=orders.findByOrderIdForUpdate(oid).orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND));
-        if (!mid.equals(callbackMid) || !Long.toString(order.getAmount()).equals(value(form,"P_AMT"))) {
-            order.markFailed(); throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"주문 정보가 일치하지 않아요.");
+        if (!gatewayProfileEnabled() || mid.isBlank() || hashKey.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
-        if (order.getStatus().equals("PAID")) return resultPage(true,oid);
-        // 이미 처리 중이거나 실패한 주문은 다시 처리하지 않아요.
-        if (!order.getStatus().equals("READY")) return resultPage(false,oid);
-        // 00은 '인증을 통과했다'는 뜻일 뿐, 아직 실제 승인 완료는 아니에요.
-        // 아래 서버 통신의 응답까지 성공해야 잔액을 올릴 수 있어요.
-        if (!"00".equals(status)) { order.markFailed(); audits.save(new AuditLog("inicis","결제 인증 실패","order:"+oid)); return resultPage(false,oid); }
-        String idc=value(form,"P_IDCNAME"), authTid=value(form,"P_AUTH_TID");
-        String host;
-        // 결제 결과에 들어온 서버 주소를 그대로 접속하면 위험해요.
-        // 스테이징/운영에서 허용한 이름만 골라 서버가 직접 접속할 주소를 정해요.
-        if (mode.equals("staging") && "stg".equals(idc)) host="stgpaypro.inicis.com";
-        else if (mode.equals("production") && ("fc".equals(idc)||"ks".equals(idc))) host=idc+"paypro.inicis.com";
-        else { order.markFailed(); return resultPage(false,oid); }
-        if (authTid.isBlank() || authTid.length()>100) { order.markFailed(); return resultPage(false,oid); }
-        // 여기부터는 우리 서버가 이니시스 승인 API를 직접 호출해요.
-        // 사용자의 브라우저가 보내는 '성공' 화면은 돈이 들어왔다는 증거로 쓰지 않아요.
-        order.markApproving();
-        try {
-            MultiValueMap<String,String> payload=new LinkedMultiValueMap<>();
-            payload.add("P_MID",mid); payload.add("P_AUTH_TID",authTid); payload.add("P_AMT",Long.toString(order.getAmount())); payload.add("P_CHARSET","UTF-8");
-            String response=RestClient.create("https://"+host).post().uri("/payment/v1/rest/payAppl.ini")
-                    .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(payload).retrieve().body(String.class);
-            // 이니시스 답장에 주문 번호, 금액, 결제 방법까지 우리 주문과 같은지 모두 대조해요.
-            Map<String,String> result=parseResult(response);
-            if ("00".equals(result.get("P_STATUS")) && mid.equals(result.get("P_MID")) && oid.equals(result.get("P_OID"))
-                    && Long.toString(order.getAmount()).equals(result.get("P_AMT"))
-                    && order.getPayType().equals(result.get("P_TYPE")) && !result.getOrDefault("P_APPL_TID","").isBlank()) {
-                // 승인 결과와 금액이 모두 맞을 때만 카드 잔액과 거래 기록을 함께 저장해요.
-                // @Transactional 덕분에 한쪽만 저장되고 다른 쪽이 빠지는 일을 줄여요.
-                DemoCard card=cards.findById(order.getCardId()).orElseThrow();
-                card.addMoney(order.getAmount());
-                order.markPaid(result.get("P_APPL_TID"));
-                transactions.save(new DemoTransaction(order.getUserId(),order.getCardId(),"이니시스 충전",order.getAmount(),sha256("pg:"+oid)));
-                audits.save(new AuditLog("inicis","결제 승인 및 충전 완료","order:"+oid));
-                return resultPage(true,oid);
+        String oid = value(form, "P_OID");
+        if (!oid.matches("KG[0-9a-f]{32}") || !mid.equals(value(form, "P_MID"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "주문 정보가 일치하지 않아요.");
+        }
+        String amount = value(form, "P_AMT");
+        String authTid = value(form, "P_AUTH_TID");
+        String host = approvalHost(value(form, "P_IDCNAME"));
+        boolean canApprove = "00".equals(value(form, "P_STATUS")) && host != null
+                && !authTid.isBlank() && authTid.length() <= 40;
+
+        String status = approvalTransactions.execute(transaction -> {
+            PaymentOrder order = lockedOrder(oid);
+            if (!Long.toString(order.getAmount()).equals(amount)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "주문 금액이 일치하지 않아요.");
             }
-            order.markFailed(); audits.save(new AuditLog("inicis","결제 승인 거절","order:"+oid));
-            return resultPage(false,oid);
-        } catch (Exception uncertain) {
-            // 인터넷이 끊기면 이니시스는 승인했지만 우리 서버가 답장을 못 받았을 수 있어요.
-            // 이럴 때 실패라고 단정하고 다시 결제시키면 두 번 돈이 나갈 수 있어요.
-            // 그래서 확인이 필요한 상태로 남겨두고 가맹점 거래내역을 확인하도록 해요.
-            order.markUnknown(); audits.save(new AuditLog("inicis","결제 승인 확인 필요","order:"+oid));
-            return resultPage(false,oid);
+            if (canApprove && "READY".equals(order.getStatus())) {
+                order.markApproving();
+                return "SEND_APPROVAL";
+            }
+            return order.getStatus();
+        });
+        if (!"SEND_APPROVAL".equals(status)) return resultPage("PAID".equals(status), oid);
+
+        // 승인 요청 전에 처리 중 상태를 커밋합니다. 재시작이나 중복 콜백에서 자동으로 재승인하지 않습니다.
+        Map<String, String> response = requestApproval(host, amount, authTid);
+        try {
+            return resultPage(Boolean.TRUE.equals(approvalTransactions.execute(transaction ->
+                    applyApproval(lockedOrder(oid), response, authTid))), oid);
+        } catch (RuntimeException persistenceFailure) {
+            // 저장에 실패해도 승인 시도 상태는 별도 트랜잭션에 남습니다.
+            approvalTransactions.executeWithoutResult(transaction -> {
+                PaymentOrder order = lockedOrder(oid);
+                if ("APPROVING".equals(order.getStatus())) markApprovalUnknown(order);
+            });
+            return resultPage(false, oid);
         }
+    }
+
+    private PaymentOrder lockedOrder(String oid) {
+        return orders.findByOrderIdForUpdate(oid)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    }
+
+    private String approvalHost(String idc) {
+        if ("staging".equals(mode) && "stg".equals(idc)) return "stgpaypro.inicis.com";
+        if ("production".equals(mode) && ("fc".equals(idc) || "ks".equals(idc))) return idc + "paypro.inicis.com";
+        return null;
+    }
+
+    private Map<String, String> requestApproval(String host, String amount, String authTid) {
+        MultiValueMap<String, String> payload = new LinkedMultiValueMap<>();
+        payload.add("P_MID", mid);
+        payload.add("P_AUTH_TID", authTid);
+        payload.add("P_AMT", amount);
+        payload.add("P_CHARSET", "UTF-8");
+        try {
+            String response = gatewayClient.post().uri("https://" + host + "/payment/v1/rest/payAppl.ini")
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(payload).retrieve().body(String.class);
+            return parseResult(response);
+        } catch (org.springframework.web.client.RestClientException failure) {
+            return Map.of();
+        }
+    }
+
+    private boolean applyApproval(PaymentOrder order, Map<String, String> result, String authTid) {
+        String oid = order.getOrderId();
+        String code = result.getOrDefault("P_STATUS", "");
+        String providerTid = result.getOrDefault("P_APPL_TID", "");
+        boolean matchingOrder = mid.equals(result.get("P_MID")) && oid.equals(result.get("P_OID"))
+                && authTid.equals(result.get("P_AUTH_TID"));
+        if (matchingOrder && "00".equals(code)
+                && Long.toString(order.getAmount()).equals(result.get("P_AMT"))
+                && order.getPayType().equals(result.get("P_TYPE"))
+                && !providerTid.isBlank() && providerTid.length() <= 40) {
+            DemoCard card = cards.findOwnedByIdForUpdate(order.getCardId(), order.getUserId()).orElseThrow();
+            card.addMoney(order.getAmount());
+            order.markPaid(providerTid);
+            transactions.save(new DemoTransaction(order.getUserId(), order.getCardId(), "이니시스 충전",
+                    order.getAmount(), sha256("pg:" + oid)));
+            audits.save(new AuditLog("inicis", "결제 승인 및 충전 완료", "order:" + oid));
+            return true;
+        }
+        if (matchingOrder && !code.isBlank() && !"00".equals(code)) {
+            order.markFailed();
+            audits.save(new AuditLog("inicis", "결제 승인 거절", "order:" + oid));
+        } else {
+            markApprovalUnknown(order);
+        }
+        return false;
+    }
+
+    private void markApprovalUnknown(PaymentOrder order) {
+        order.markUnknown();
+        audits.save(new AuditLog("inicis", "결제 승인 확인 필요", "order:" + order.getOrderId()));
     }
 
     @GetMapping("/{orderId}")
@@ -169,6 +226,11 @@ class InicisPaymentController {
         PaymentOrder order=orders.findByOrderId(orderId).filter(o->o.getUserId().equals(user.getId()))
                 .orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND));
         return new PaymentStatus(order.getOrderId(),order.getAmount(),order.getPayType(),order.getStatus());
+    }
+
+    private boolean gatewayProfileEnabled() {
+        return !environment.matchesProfiles("sandbox")
+                && ("staging".equals(mode) || ("production".equals(mode) && environment.matchesProfiles("production")));
     }
 
     private String chkFake(long amount,String oid,String stamp) {
@@ -221,4 +283,3 @@ class CardChargeController {
         return payments.prepareOrder(cardId,request.amount(),method,requestKey,auth);
     }
 }
-

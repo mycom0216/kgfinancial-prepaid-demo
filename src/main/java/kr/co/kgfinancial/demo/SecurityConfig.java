@@ -24,6 +24,7 @@ import org.springframework.security.web.csrf.XorCsrfTokenRequestAttributeHandler
 import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -35,7 +36,7 @@ class SecurityConfig {
 
     @Bean UserDetailsService userDetailsService(UserRepository users) {
         // 로그인할 때 사용자가 적은 이름을 찾아 암호화된 비밀번호와 역할만 보안 기능에 건네요.
-        return username -> users.findByUsername(username.toLowerCase())
+        return username -> users.findByUsername(username.toLowerCase(java.util.Locale.ROOT))
                 .map(account -> User.withUsername(account.getUsername())
                         .password(account.getPasswordHash()).roles(account.getRole()).build())
                 .orElseThrow(() -> new org.springframework.security.core.userdetails.UsernameNotFoundException("계정을 찾지 못했어요."));
@@ -56,6 +57,7 @@ class SecurityConfig {
                     .ignoringRequestMatchers(new BearerOnlyRequestMatcher()))
             .authorizeHttpRequests(auth -> auth
                 // 로그인·회원가입·결제 결과 받기는 로그인 전에도 들어올 수 있어야 해요.
+                .requestMatchers("/", "/index.html", "/dashboard.js", "/dashboard.css").permitAll()
                 .requestMatchers("/api/auth/register", "/api/auth/csrf", "/api/payments/inicis/next", "/api/mobile/auth/register", "/api/mobile/auth/login", "/error").permitAll()
                 // /api/admin으로 시작하는 주소는 ADMIN 역할이 있는 사람만 써요.
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
@@ -104,8 +106,8 @@ class SecurityConfig {
             @Value("${app.admin.password:}") String password) {
         return args -> {
             // 관리자 계정은 공개 코드에 비밀번호를 넣지 않고, 배포 환경에서 안전하게 넣은 경우에만 만들어요.
-            if (!username.isBlank() && password.length() >= 16 && !users.existsByUsername(username.toLowerCase())) {
-                users.save(new UserAccount(username.toLowerCase(), passwords.encode(password), "ADMIN"));
+            if (!username.isBlank() && password.length() >= 16 && !users.existsByUsername(username.toLowerCase(java.util.Locale.ROOT))) {
+                users.save(new UserAccount(username.toLowerCase(java.util.Locale.ROOT), passwords.encode(password), "ADMIN"));
             }
         };
     }
@@ -113,6 +115,8 @@ class SecurityConfig {
 
 // 브라우저가 쿠키에서 받은 토큰을 헤더에 담아 보냈는지 확인해요.
 class BrowserCsrfHandler implements CsrfTokenRequestHandler {
+    static final String RAW_TOKEN_ATTRIBUTE = "kr.co.kgfinancial.demo.BrowserCsrfHandler.token";
+
     private final CsrfTokenRequestAttributeHandler plain = new CsrfTokenRequestAttributeHandler();
     private final XorCsrfTokenRequestAttributeHandler masked = new XorCsrfTokenRequestAttributeHandler();
 
@@ -121,7 +125,7 @@ class BrowserCsrfHandler implements CsrfTokenRequestHandler {
                        Supplier<CsrfToken> token) {
         // 브라우저 화면과 서버가 서로 토큰을 주고받아 요청이 진짜 내 화면에서 시작됐는지 확인해요.
         masked.handle(request, response, token);
-        token.get(); // 브라우저가 쓸 토큰 쿠키가 만들어지도록 해요.
+        request.setAttribute(RAW_TOKEN_ATTRIBUTE, token.get());
     }
 
     @Override
@@ -138,6 +142,7 @@ class BrowserCsrfHandler implements CsrfTokenRequestHandler {
 class CsrfController {
     // 글을 바꾸기 전에 이 토큰을 받아 X-XSRF-TOKEN 헤더에 담아 보내요.
     @GetMapping("/api/auth/csrf")
-    Map<String, String> csrf(CsrfToken token) { return Map.of("token", token.getToken()); }
+    Map<String, String> csrf(@RequestAttribute(BrowserCsrfHandler.RAW_TOKEN_ATTRIBUTE) CsrfToken token) {
+        return Map.of("token", token.getToken());
+    }
 }
-

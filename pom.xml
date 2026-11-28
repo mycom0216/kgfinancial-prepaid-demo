@@ -10,8 +10,8 @@
     <groupId>kr.co.kgfinancial</groupId>
     <artifactId>prepaid-card-demo</artifactId>
     <version>1.2.0</version>
-    <name>prepaid-card-demo</name>
-    <description>보안 기능을 연습하는 선불카드 백엔드 예제</description>
+    <name>Prepaid Card Service</name>
+    <description>선불카드 잔액, 거래, 충전 주문을 관리하는 서비스</description>
     <properties><java.version>17</java.version></properties>
     <dependencies>
         <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>

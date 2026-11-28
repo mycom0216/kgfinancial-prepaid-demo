@@ -11,15 +11,21 @@ import java.util.Optional;
 // JpaRepository가 기본 저장, 삭제, ID 검색 기능을 미리 제공해요.
 interface UserRepository extends JpaRepository<UserAccount, Long> {
     Optional<UserAccount> findByUsername(String username);
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from UserAccount u where u.username = :username")
+    Optional<UserAccount> findByUsernameForUpdate(String username);
     boolean existsByUsername(String username);
 }
 interface CardRepository extends JpaRepository<DemoCard, Long> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select c from DemoCard c where c.id = :id and c.ownerId = :ownerId")
+    Optional<DemoCard> findOwnedByIdForUpdate(Long id, Long ownerId);
     // 이름이 findByOwnerId면 Spring이 owner_id와 같은 카드만 찾는 검색을 만들어줘요.
     List<DemoCard> findByOwnerIdOrderByIdDesc(Long ownerId);
 }
 interface TransactionRepository extends JpaRepository<DemoTransaction, Long> {
     Optional<DemoTransaction> findByUserIdAndIdempotencyKey(Long userId, String key);
-    List<DemoTransaction> findByCardIdOrderByCreatedAtDesc(Long cardId);
+    List<DemoTransaction> findByCardIdOrderByCreatedAtDescIdDesc(Long cardId);
 }
 interface AuditRepository extends JpaRepository<AuditLog, Long> {
     List<AuditLog> findTop100ByOrderByCreatedAtDesc();
@@ -37,4 +43,3 @@ interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long> {
 interface MobileAccessTokenRepository extends JpaRepository<MobileAccessToken, Long> {
     Optional<MobileAccessToken> findByTokenHash(String tokenHash);
 }
-

@@ -1,0 +1,47 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #182738;
+  background: #f1f5f8;
+  line-height: 1.5;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; }
+.shell { width: min(100% - 2rem, 1060px); margin-inline: auto; }
+.top { background: #132839; color: #fff; }
+.top-inner, .toolbar, #session { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
+.top-inner { justify-content: space-between; padding-block: .85rem; }
+.top a { color: inherit; font-weight: 700; text-decoration: none; }
+main { padding-block: 1.4rem 3rem; }
+h1, h2, h3 { line-height: 1.2; }
+h1 { font-size: clamp(1.8rem, 4vw, 2.6rem); margin: 0 0 .5rem; }
+h2 { font-size: 1.25rem; margin: 0; }
+h3 { font-size: 1rem; }
+.toolbar h2 { margin-right: auto; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.panel { min-width: 0; background: white; border: 1px solid #d9e3ea; border-radius: 1rem; padding: 1.2rem; }
+#history, #admin { margin-top: 1rem; }
+form, label { display: grid; gap: .35rem; }
+form { align-content: start; gap: .85rem; }
+label { font-weight: 600; }
+input, select, button { font: inherit; border-radius: .5rem; padding: .55rem .7rem; max-width: 100%; }
+input, select { background: #fff; border: 1px solid #a4b4c0; color: inherit; }
+button { background: #075943; color: white; border: 1px solid transparent; cursor: pointer; font-weight: 700; }
+button:disabled { opacity: .6; cursor: wait; }
+button.secondary { background: #e3edf3; color: #193b50; }
+:focus-visible { outline: 3px solid #2778ae; outline-offset: 2px; }
+.muted, #empty { color: #4c6172; }
+.muted { margin: 0; font-size: .9rem; }
+#selected-card { margin-top: 1rem; }
+.balance-label { margin-top: 1.1rem; }
+.balance { margin: 0; font-size: 2rem; font-weight: 800; overflow-wrap: anywhere; }
+.badge { display: inline-block; background: #d9f1e8; color: #084e3a; padding: .35rem .7rem; border-radius: .5rem; }
+#notice { min-height: 1.5em; margin: .5rem 0 1rem; color: #075943; }
+#notice[data-error] { color: #9d291e; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; margin-top: .7rem; }
+th, td { padding: .6rem .45rem; border-bottom: 1px solid #d9e3ea; text-align: left; }
+th { background: #f0f5f7; white-space: nowrap; }
+@media (max-width: 680px) {
+  .grid { grid-template-columns: 1fr; }
+}

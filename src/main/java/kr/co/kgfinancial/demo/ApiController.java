@@ -8,10 +8,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -26,11 +27,19 @@ record AmountRequest(@jakarta.validation.constraints.Positive @jakarta.validatio
 // API가 화면에 돌려주는 카드 모양이에요. 실제 카드 번호는 존재하지 않아요.
 record CardView(Long id, long balance) { }
 record CardCreated(Long id, long balance) { }
-record CsrfView(String token) { }
+record TransactionView(Long id, Long cardId, String kind, long amount, Instant createdAt) {
+    TransactionView(DemoTransaction transaction) {
+        this(transaction.getId(), transaction.getCardId(), transaction.getKind(), transaction.getAmount(), transaction.getCreatedAt());
+    }
+}
+record AuditView(Long id, String actor, String action, String target, Instant createdAt) {
+    AuditView(AuditLog log) {
+        this(log.getId(), log.getActor(), log.getAction(), log.getTarget(), log.getCreatedAt());
+    }
+}
 
 // 회원가입, 카드 관리, 연습용 카드 결제처럼 앱의 기본 기능을 맡아요.
 @RestController
-@Validated
 @RequestMapping("/api")
 class ApiController {
     private final UserRepository users;
@@ -54,7 +63,7 @@ class ApiController {
         if (request.password().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "비밀번호는 UTF-8 기준 72바이트 이하여야 해요.");
         }
-        String username = request.username().toLowerCase();
+        String username = request.username().toLowerCase(Locale.ROOT);
         if (users.existsByUsername(username)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 사용 중인 아이디예요.");
         }
@@ -92,14 +101,15 @@ class ApiController {
     CardView pay(@PathVariable Long id, @RequestHeader("Idempotency-Key") @Size(min=10, max=100) String key,
                  @Valid @RequestBody AmountRequest request, Authentication auth) {
         // 이 기능은 PG 결제가 아니라, 이미 있는 연습 잔액을 차감하는 내부 연습 결제예요.
-        return changeBalance(id, key, request.amount(), "연습 결제", auth);
+        return changeBalance(id, key, request.amount(), false, auth);
     }
 
     @GetMapping("/cards/{id}/transactions")
-    List<DemoTransaction> history(@PathVariable Long id, Authentication auth) {
+    List<TransactionView> history(@PathVariable Long id, Authentication auth) {
         // 카드 소유자를 먼저 확인한 뒤에 그 카드의 거래 기록만 보여줘요.
         DemoCard card = findOwnedCard(id, auth.getName());
-        return transactions.findByCardIdOrderByCreatedAtDesc(card.getId());
+        return transactions.findByCardIdOrderByCreatedAtDescIdDesc(card.getId()).stream()
+                .map(TransactionView::new).toList();
     }
 
     // 이 주소는 관리자 역할이 있는 계정만 열 수 있어요.
@@ -112,12 +122,20 @@ class ApiController {
     }
 
     @GetMapping("/admin/audit-logs")
-    List<AuditLog> auditLogs() { return audits.findTop100ByOrderByCreatedAtDesc(); }
+    List<AuditView> auditLogs() {
+        return audits.findTop100ByOrderByCreatedAtDesc().stream().map(AuditView::new).toList();
+    }
 
-    private CardView changeBalance(Long id, String key, long amount, String kind, Authentication auth) {
-        // 충전이나 연습 결제를 한 곳에서 관리해서 두 기능의 중복 방지 규칙이 달라지지 않게 해요.
-        UserAccount user = findUser(auth.getName());
-        DemoCard card = findOwnedCard(id, auth.getName());
+    @Transactional
+    public CardView addPracticeFunds(Long id, String key, long amount, Authentication auth) {
+        return changeBalance(id, key, amount, true, auth);
+    }
+
+    private CardView changeBalance(Long id, String key, long amount, boolean topUp, Authentication auth) {
+        String kind = topUp ? "샌드박스 충전" : "연습 결제";
+        // 요청 키는 사용자 단위로, 잔액은 카드 단위로 잠급니다.
+        UserAccount user = users.findByUsernameForUpdate(auth.getName()).orElseThrow();
+        DemoCard card = requireOwner(cards.findOwnedByIdForUpdate(id, user.getId()).orElse(null), user.getId());
         String safeKey = hashKey(key);
         DemoTransaction previous = transactions.findByUserIdAndIdempotencyKey(user.getId(), safeKey).orElse(null);
         if (previous != null) {
@@ -128,10 +146,10 @@ class ApiController {
             return new CardView(card.getId(), card.getBalance());
         }
         // 연습 결제는 가진 돈보다 많이 쓸 수 없어요.
-        if ("연습 결제".equals(kind) && card.getBalance() < amount) {
+        if (!topUp && card.getBalance() < amount) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "카드에 연습용 잔액이 부족해요.");
         }
-        if ("충전".equals(kind)) card.addMoney(amount);
+        if (topUp) card.addMoney(amount);
         else card.spendMoney(amount);
         transactions.save(new DemoTransaction(user.getId(), id, kind, amount, safeKey));
         audits.save(new AuditLog(auth.getName(), kind, "card:" + id));
@@ -142,9 +160,11 @@ class ApiController {
         // 카드가 없을 때와 다른 사람 카드일 때 같은 안내를 보여줘요.
         // 그래야 공격자가 번호를 하나씩 넣어 다른 사람 카드의 존재를 알아내기 어려워요.
         UserAccount user = findUser(username);
-        DemoCard card = cards.findById(id).orElseThrow(
-                () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "카드를 찾지 못했어요."));
-        if (!card.getOwnerId().equals(user.getId())) {
+        return requireOwner(cards.findById(id).orElse(null), user.getId());
+    }
+
+    private DemoCard requireOwner(DemoCard card, Long userId) {
+        if (card == null || !card.getOwnerId().equals(userId)) {
             // 다른 사람 카드가 있는지 여부도 숨기도록 같은 안내를 보여 줘요.
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "카드를 찾지 못했어요.");
         }
@@ -167,10 +187,3 @@ class ApiController {
                 () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요해요."));
     }
 }
-
-
-
-
-
-
-
