@@ -1,8 +1,23 @@
-# KG파이낸셜 개발 직무 연습: 보안 선불카드와 KG이니시스 결제
+# 선불카드 서비스
 
-사람인·잡코리아의 KG파이낸셜 개발자 공고에서 보이는 Java, Spring Boot, REST API, 관계형 DB, 백오피스와 선불카드 업무를 연습하는 프로젝트예요. 어려운 기능도 초등학생이 읽기 쉽게 한국어 주석으로 설명해요.
+선불카드 발급, 잔액, 거래 내역, 관리자 감사 기록을 관리하는 독립 프로젝트예요. 실거래 충전에는 KG이니시스 가맹점 자격과 운영 환경이 필요해요.
 
-> 이 프로젝트는 KG파이낸셜의 실제 서비스가 아니에요. 결제를 사용하려면 본인 명의 KG이니시스 테스트 가맹점과 공개 HTTPS 서버가 필요해요. 이 프로젝트는 결제 정보를 저장하지 않으며, 실제 고객 정보를 넣지 마세요.
+## 브라우저에서 바로 체험하기
+
+Java 17과 Maven을 설치한 뒤 다음 명령을 실행하고 [선불카드 대시보드](http://127.0.0.1:8080/)를 열어요.
+
+```bash
+mvn spring-boot:run "-Dspring-boot.run.profiles=sandbox"
+```
+
+1. 회원가입 후 로그인하고 **카드 발급**을 눌러요.
+2. 거래 유형에서 **샌드박스 충전**을 선택해 10,000원을 넣어요.
+3. **연습 결제**를 선택해 3,500원을 사용해요. 잔액은 6,500원이 되고 거래 내역에서 충전과 결제를 필터링하거나 정렬할 수 있어요.
+4. 관리자 화면도 보려면 실행 전에 `BOOTSTRAP_ADMIN_USERNAME`과 `BOOTSTRAP_ADMIN_PASSWORD`를 설정해요. 비밀번호는 16자 이상이어야 해요. 관리자 로그인 시 전체 카드와 최근 감사 기록을 확인할 수 있어요.
+
+샌드박스는 기본적으로 로컬 주소에 바인딩하고, 전용 H2 메모리 DB를 사용해 재시작하면 데이터가 사라져요. 이 프로필에서는 이니시스 결제 주문 및 콜백 처리가 비활성화돼요. PostgreSQL과 함께 실행할 수 없어요. 대시보드의 샌드박스 충전 메뉴는 이 프로필에서만 표시돼요.
+
+`mvn verify`로 회원가입, CSRF 검사, 로그인, 카드 소유권, 동시 충전 재시도, 잔액 초과 결제, 관리자 권한을 검증할 수 있어요.
 
 ## 준비된 기능
 
@@ -34,9 +49,9 @@ APP_PUBLIC_URL=https://내-HTTPS-도메인
 {"cardId":1,"amount":1000,"method":"CARD"}
 ```
 
-`method`는 `CARD`(신용카드) 또는 `BANK`(실시간 계좌이체)예요. 응답에는 이니시스 결제창 스크립트 주소와 폼에 넣을 결제 파라미터가 와요. 웹 화면은 이 파라미터를 이니시스 공식 JavaScript 결제창에 전달해야 해요. 결제창이 호출되기 전에 로그인된 브라우저 세션과 CSRF를 적용하는 쇼핑 화면을 구성하세요. 인증 뒤 이니시스가 콜백으로 돌아오면 서버가 이니시스 승인 API를 직접 부릅니다. 브라우저가 보낸 “성공” 메시지만으로 잔액을 충전하지 않아요.
+`method`는 `CARD`(신용카드) 또는 `BANK`(실시간 계좌이체)예요. 응답에는 이니시스 결제창 스크립트 주소와 폼에 넣을 결제 파라미터가 와요. PG 결제창을 열려면 별도의 웹 화면에서 이 파라미터를 이니시스 공식 JavaScript에 전달해야 해요. 결제창이 호출되기 전에 로그인된 브라우저 세션과 CSRF를 적용하는 쇼핑 화면을 구성하세요. 인증 뒤 이니시스가 콜백으로 돌아오면 서버가 이니시스 승인 API를 직접 부릅니다. 브라우저가 보낸 “성공” 메시지만으로 잔액을 충전하지 않아요.
 
-주문 상태 확인은 로그인한 사용자가 `GET /api/payments/{orderId}`로 볼 수 있어요. `PAID`가 아니면 충전이 완료된 것이 아니에요. `APPROVAL_UNKNOWN`은 통신이 끊겨 이니시스 가맹점 관리자에서 거래를 확인해야 하는 상태예요. 같은 주문을 다시 승인하지 마세요.
+주문 상태 확인은 로그인한 사용자가 `GET /api/payments/{orderId}`로 볼 수 있어요. `PAID`가 아니면 충전이 완료된 것이 아니에요. `APPROVAL_UNKNOWN`이거나 오랫동안 `APPROVING`이면 이니시스 가맹점 관리자에서 거래를 확인해야 해요. 같은 주문을 다시 승인하지 마세요.
 
 ## 내 컴퓨터에서 PostgreSQL과 앱 실행하기 (Windows PowerShell)
 
@@ -58,7 +73,7 @@ Copy-Item .env.example .env
 
 이 스크립트는 `.env`를 이 PowerShell 창에서만 읽고, Docker 안의 PostgreSQL을 켠 다음 앱을 실행해요. 처음 실행할 때에는 앱이 Flyway로 DB 표를 자동으로 만들어요. 데이터는 Docker의 `kgfinancial-db` 저장 공간에 남기 때문에 앱이나 컴퓨터를 다시 시작해도 보존돼요. 서버를 멈추려면 별도 PowerShell 창에서 `docker compose down`을 실행하세요. 데이터까지 지우려면 `docker compose down -v`를 실행하지만, 저장된 DB 데이터가 모두 삭제돼요.
 
-앱 주소는 `http://localhost:8080`이에요. 로그인 안내가 나오면 앱이 실행된 상태예요. 관리자 로그인은 `.env`의 `BOOTSTRAP_ADMIN_USERNAME`과 `BOOTSTRAP_ADMIN_PASSWORD` 값을 사용해요.
+앱 주소는 `http://localhost:8080`이에요. 대시보드 로그인 화면이 나오면 앱이 실행된 상태예요. 관리자 로그인은 `.env`의 `BOOTSTRAP_ADMIN_USERNAME`과 `BOOTSTRAP_ADMIN_PASSWORD` 값을 사용해요.
 
 ## 모바일 앱에서 API 부르기
 
@@ -72,9 +87,25 @@ Authorization: Bearer 로그인응답의_accessToken
 
 예를 들어 카드 목록은 `GET /api/cards`, 충전 주문은 `POST /api/cards/{카드번호}/charge`, 잔액 사용 연습은 `POST /api/cards/{카드번호}/pay`예요. 로그아웃은 `POST /api/mobile/auth/logout`을 부르면 그 토큰을 바로 폐기해요. 이 서버는 앱 전용 HTTPS 주소에 배포해야 해요. 지금 프로젝트에는 특정 회사의 비공개 모빌카드 API 주소나 데이터 형식이 없어서, 여기까지는 일반 Android/iOS 앱과 연결할 수 있는 표준 API예요.
 
-## 운영 배포 전 남은 절차
+## 운영 프로필
 
-GitHub 저장소는 private으로 유지해요. 운영 결제는 `INICIS_MODE=production`과 실 MID·키, 가맹점 운영 계약 및 도메인/IP 등록이 모두 필요해요. 지금 값이 없어 테스트 거래도 아직 실제 가맹점으로 실행하지 않았어요. 운영 전에는 KG이니시스가 발급한 승인 응답 샘플로 필드 형식을 확인하고, 접근 제한·속도 제한·비밀 저장소·DB 백업/복구·로그 보존·보안 점검·개인정보 처리 검토가 필요해요. 환불/취소는 별도 INIAPI 키와 정책이 필요하므로 이 예제에서 완료된 기능으로 표시하지 않아요.
+빌드 후 배포 환경의 비밀 저장소나 환경 변수로 아래 값을 설정하고 앱을 시작해요.
+
+| 변수 | 설정 |
+| --- | --- |
+| `SPRING_PROFILES_ACTIVE` | `production` |
+| `DATABASE_URL` | 운영 PostgreSQL JDBC 주소 |
+| `DATABASE_USERNAME`, `DATABASE_PASSWORD` | 운영 DB 인증 정보 |
+| `INICIS_MODE` | `production` |
+| `INICIS_MID`, `INICIS_HASH_KEY` | 가맹점에서 발급받은 운영값 |
+| `APP_PUBLIC_URL` | HTTPS 서비스 주소 (경로 없이 입력) |
+
+```bash
+mvn verify
+java -jar target/prepaid-card-demo-1.2.0.jar
+```
+
+`production`은 PostgreSQL 프로필과 Flyway를 활성화해요. HTTPS 종료를 담당하는 프록시에서 앱으로 연결할 수 있고, 세션 쿠키는 HTTPS 접속에서 사용돼요. 실제 고객 데이터를 받기 전에 가맹점 승인 응답, 이중 요청, 통신 장애 후 거래 대사, 환불 및 취소, 운영 모니터링을 가맹점 테스트 환경에서 검증해야 해요. 현재 구현의 운영 프로필과 주문 API는 별도 결제창 연동 및 실거래 검증이 필요해요.
 
 ## 공식 참고
 
