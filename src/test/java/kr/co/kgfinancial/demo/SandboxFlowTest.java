@@ -129,7 +129,7 @@ class SandboxFlowTest {
         private HttpRequest.Builder request(String path) {
             return HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
                     .timeout(Duration.ofSeconds(10))
-                    .header("Accept", "application/json");
+                    .header("Accept", "/".equals(path) ? "text/html" : "application/json");
         }
 
         @Override
