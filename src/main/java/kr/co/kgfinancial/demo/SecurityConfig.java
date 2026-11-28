@@ -115,7 +115,7 @@ class SecurityConfig {
 
 // 브라우저가 쿠키에서 받은 토큰을 헤더에 담아 보냈는지 확인해요.
 class BrowserCsrfHandler implements CsrfTokenRequestHandler {
-    static final String RAW_TOKEN_ATTRIBUTE = BrowserCsrfHandler.class.getName() + ".token";
+    static final String RAW_TOKEN_ATTRIBUTE = "kr.co.kgfinancial.demo.BrowserCsrfHandler.token";
 
     private final CsrfTokenRequestAttributeHandler plain = new CsrfTokenRequestAttributeHandler();
     private final XorCsrfTokenRequestAttributeHandler masked = new XorCsrfTokenRequestAttributeHandler();
